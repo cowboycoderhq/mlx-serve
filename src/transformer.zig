@@ -55614,7 +55614,7 @@ test "qsa sparse attn: one fused dispatch replaces the arm's op chain (>= 100 op
     try std.testing.expect(gather_ops - kernel_ops >= 100);
 }
 
-test "qsa sparse attn dense: bf16 cache views at verify widths equal the masked reference (S 2..15, kv 2100..40000)" {
+test "qsa sparse attn dense: bf16 cache views at decode and verify widths equal the masked reference (S 1..15, kv 2100..40000)" {
     // The dense arm must attend exactly the mask arm's key set (each row's own blocks + its own
     // causal tail) through any view the cache hands it: the cache's capacity-strided view, a
     // hand-built slice of a wider buffer, and a head slice with a non-zero data offset.
@@ -55629,6 +55629,9 @@ test "qsa sparse attn dense: bf16 cache views at verify widths equal the masked 
     qsa_attn_dense_override = null;
 
     const cases = [_]struct { s: c_int, kv: c_int, kb: c_int, hq: c_int, hkv: c_int }{
+        // Decode width, as batched steps serve it (floor 1): NSPLIT at its ceiling, most splits empty.
+        .{ .s = 1, .kv = 9000, .kb = 512, .hq = 24, .hkv = 2 },
+        .{ .s = 1, .kv = 40000, .kb = 512, .hq = 24, .hkv = 2 },
         .{ .s = 2, .kv = 2100, .kb = 512, .hq = 24, .hkv = 2 },
         .{ .s = 4, .kv = 2100, .kb = 512, .hq = 24, .hkv = 2 },
         .{ .s = 6, .kv = 9000, .kb = 512, .hq = 24, .hkv = 2 },
@@ -55682,7 +55685,7 @@ test "qsa sparse attn dense: bf16 cache views at verify widths equal the masked 
 
         // Contiguous input: the parity bar against the masked reference.
         var cview = DenseKVView{ .k = k_c, .v = v_c, .owned = false };
-        const got_c = (try qsaSparseAttn(s, q, &cview, blocks, ratio, scale)) orelse return error.SparseAttnDeclined;
+        const got_c = (try qsaSparseAttnFloor(s, q, &cview, blocks, ratio, scale, 1)) orelse return error.SparseAttnDeclined;
         defer _ = mlx.mlx_array_free(got_c);
         const dd = try attn256MaxDiff(got_c, ref, s);
         const dc = try attn256Cosine(got_c, ref, s);
@@ -55692,7 +55695,7 @@ test "qsa sparse attn dense: bf16 cache views at verify widths equal the masked 
 
         // Strided, offset view of the same values: bit-identical to the contiguous input.
         var sview = DenseKVView{ .k = k_view, .v = v_view, .owned = false };
-        const got_s = (try qsaSparseAttn(s, q, &sview, blocks, ratio, scale)) orelse return error.SparseAttnDeclined;
+        const got_s = (try qsaSparseAttnFloor(s, q, &sview, blocks, ratio, scale, 1)) orelse return error.SparseAttnDeclined;
         defer _ = mlx.mlx_array_free(got_s);
         try std.testing.expectEqual(@as(f32, 0.0), try attn256MaxDiff(got_s, got_c, s));
 
@@ -55703,7 +55706,7 @@ test "qsa sparse attn dense: bf16 cache views at verify widths equal the masked 
         defer view.deinit();
         try std.testing.expect(!view.has_quant_triple);
         try std.testing.expectEqual(c.kv, mlx.getShape(view.k)[2]);
-        const got_v = (try qsaSparseAttn(s, q, &view, blocks, ratio, scale)) orelse return error.SparseAttnDeclined;
+        const got_v = (try qsaSparseAttnFloor(s, q, &view, blocks, ratio, scale, 1)) orelse return error.SparseAttnDeclined;
         defer _ = mlx.mlx_array_free(got_v);
         try std.testing.expectEqual(@as(f32, 0.0), try attn256MaxDiff(got_v, got_c, s));
 
